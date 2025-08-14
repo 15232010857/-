@@ -8,7 +8,7 @@ from datetime import datetime
 import csv
 import concurrent.futures
 from requests.adapters import HTTPAdapter
-from urllib3.util.retry import Retry
+from urllib3.util.retry import重试
 from fake_useragent import UserAgent
 import pymysql
 from pymysql.cursors import DictCursor
@@ -909,4 +909,5 @@ def main():
 
 
 if __name__ == "__main__":
+
     main()
