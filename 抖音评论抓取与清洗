@@ -1,0 +1,132 @@
+# ===================== 导入依赖 =====================
+import csv
+import time
+import re
+from datetime import datetime
+from DrissionPage import ChromiumPage, ChromiumOptions
+import random
+
+# ===================== 清洗表情符号函数 =====================
+def clean_emoji(text):
+    # 1. 去掉 @用户
+    text = re.sub(r'@\S+', '', text)
+    
+    # 2. 去掉方括号包裹的表情符号，如 [杀马特]、[戳手手] 等
+    text = re.sub(r'\[.*?\]', '', text)
+    
+    # 3. 去掉所有 EMOJI 表情
+    emoji_pattern = re.compile('['
+                           '\U0001F600-\U0001F64F'  # 表情符号
+                           '\U0001F300-\U0001F5FF'  # 符号和象形文字
+                           '\U0001F680-\U0001F6FF'  # 交通和地图符号
+                           '\U0001F1E0-\U0001F1FF'  # 国旗
+                           '\U0001f926-\U0001f937'  # 补充表情
+                           '\u2640-\u2642'  # 性别符号
+                           '\u2600-\u26FF'  # 杂项符号
+                           '\ufe0f'  # 修饰符
+                           ']+', flags=re.UNICODE)
+    text = emoji_pattern.sub(r'', text)
+    
+    # 4. 合并多余空格
+    text = re.sub(r'\s+', ' ', text).strip()
+    
+    # 5. 过滤：纯符号 / 空内容
+    # 检查是否至少包含一个中文字符、英文字母或数字
+    if not text or not re.search(r'[\u4e00-\u9fa5a-zA-Z0-9]', text):
+        return ''
+    
+    return text
+
+# ===================== 抖音评论爬取主函数（供外部调用） =====================
+def crawl_douyin_comments_main(url):
+    """爬取抖音视频评论，返回评论内容列表"""
+    # 创建 CSV 文件并写入表头
+    with open('douyin_comments.csv', mode='w', encoding='utf-8', newline='') as f:
+        csv_writer = csv.DictWriter(f, fieldnames=[
+            '昵称', '地区', '日期', '点赞', '回复数', '评论内容', '是否回复'
+        ])
+        csv_writer.writeheader()
+
+    # 启动浏览器并监听评论接口
+    page = ChromiumPage()
+    page.listen.start('comment/list/')  # 监听抖音评论接口
+
+    # 打开目标视频
+    page.get(url)
+    page.wait(2)
+    comment_box = page.ele('xpath://*[@id="douyin-right-container"]/div[2]')
+
+    # 抓取评论
+    comments_data = []
+    seen_cursors = set()
+    print("开始抓取评论...")
+
+    scroll_round = 0
+    while True:
+        for _ in range(15):
+            scroll_pix = random.randint(1000, 1500)
+            comment_box.scroll(scroll_pix)
+            time.sleep(random.uniform(0.2, 0.5))
+
+            try:
+                packet = page.listen.wait(timeout=0.2)
+                if packet and packet.response and packet.response.body:
+                    json_data = packet.response.body
+                    if 'comments' in json_data:
+                        cursor = json_data.get('cursor')
+                        if cursor and cursor not in seen_cursors:
+                            seen_cursors.add(cursor)
+                            new_comments = json_data['comments']
+                            comments_data.extend(new_comments)
+                            if len(comments_data) % 100 == 0:
+                                print(f"已抓取：{len(comments_data)} 条")
+
+                            if json_data.get('has_more') == 0:
+                                print("已无更多评论")
+                                break
+            except:
+                pass
+
+            scroll_round += 1
+
+        if page.ele('text:暂时没有更多评论') or len(comments_data) > 1000:
+            print(f'评论全部加载完毕，共抓取 {len(comments_data)} 条')
+            break
+
+    print(f"共获取 {len(comments_data)} 条评论数据")
+
+    # 提取评论内容
+    comments_text = []
+    if comments_data:
+        for comment in comments_data:
+            try:
+                cleaned_text = clean_emoji(comment.get('text', '').replace('\n', ' ').replace(',', '，'))
+                if cleaned_text:
+                    comments_text.append(cleaned_text)
+
+                for reply in comment.get('reply_comments', []):
+                    cleaned_reply = clean_emoji(reply.get('text', '').replace('\n', ' ').replace(',', '，'))
+                    if cleaned_reply:
+                        comments_text.append(cleaned_reply)
+            except Exception as e:
+                print(f"处理评论失败: {e}")
+                continue
+
+        # 写入 CSV 文件
+        with open('douyin_comments.csv', mode='a', encoding='utf-8', newline='') as f:
+            csv_writer = csv.DictWriter(f, fieldnames=['评论内容'])
+            for text in comments_text:
+                csv_writer.writerow({'评论内容': text})
+
+        print(f"✅ 评论数据已成功保存至 douyin_comments.csv，共 {len(comments_text)} 条")
+
+    # 关闭浏览器
+    page.quit()
+    
+    return comments_text
+
+# ===================== 独立运行入口 =====================
+if __name__ == "__main__":
+    url = input("请输入抖音视频网址：")
+    comments = crawl_douyin_comments_main(url)
+    print(f"爬取完成，共获取 {len(comments)} 条评论")
